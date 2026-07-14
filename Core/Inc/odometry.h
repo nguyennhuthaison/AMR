@@ -2,7 +2,6 @@
 #define ODOMETRY_H
 #include "main.h"
 #include "encoder.h"
-#define WHEEL_BASE 0.15f // Khoảng cách giữa hai bánh xe (m)
 typedef struct {
     float x;//toa do x
     float y;//toa do y

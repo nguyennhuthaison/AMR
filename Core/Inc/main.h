@@ -62,6 +62,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 #define PI 3.14159265358979323846f
+#define WHEEL_BASE 0.15f // Khoảng cách giữa hai bánh xe (m)
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
