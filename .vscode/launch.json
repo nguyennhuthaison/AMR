@@ -1,0 +1,35 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "STM32F103 Debug",
+            "cwd": "${workspaceFolder}",
+            "type": "cortex-debug",
+            "request": "launch",
+
+            "servertype": "openocd",
+            "serverpath": "/usr/bin/openocd",
+
+            "device": "STM32F103C8",
+            "gdbPath": "/usr/bin/gdb-multiarch",
+
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32f1x.cfg"
+            ],
+
+            "openOCDPreConfigLaunchCommands": [
+                "set CPUTAPID 0"
+            ],
+
+            "liveWatch": {
+                "enabled": true,
+                "samplesPerSecond": 4
+            },
+
+            "executable": "${workspaceFolder}/build/AMR_stm32.elf",
+
+            "runToEntryPoint": "main"
+        }
+    ]
+}
