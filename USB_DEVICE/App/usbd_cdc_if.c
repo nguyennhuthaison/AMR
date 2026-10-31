@@ -159,8 +159,8 @@ static void parse_ros2_command(char *cmd_str)
         cmd_vel_right = (r_sign == 'p') ? r_val : -r_val;
         cmd_vel_left  = (l_sign == 'p') ? l_val : -l_val;
 
-        // Toggle LED báo hiệu nhận thành công (chỉnh đúng Port & Pin của bạn)
-        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13); 
+        // Bao cho main.c co lenh moi (LED duoc dao trong main)
+        new_cmd_flag = 1;
     }
 }
 /* USER CODE END PRIVATE_FUNCTIONS_DECLARATION */

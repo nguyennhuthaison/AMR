@@ -43,7 +43,16 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define MAX_WHEEL_SPEED   5.0f    // Van toc banh toi da (rad/s), lenh lon hon se bi gioi han
+#define PWM_MAX           1000    // Duty toi da (ARR TIM3 = 999)
+#define CMD_TIMEOUT_MS    500     // Qua thoi gian nay khong co lenh moi -> dung motor
+#define SPEED_DEADBAND    0.01f   // |target| nho hon gia tri nay coi nhu lenh dung
+#define ENC_R_SIGN        (-1.0f) // Encoder phai lap nguoc chieu (giong Encoder_Nguoc_Read_Raw)
 
+// He so PID (sai so tinh theo rad/s, dau ra la duty) -> can tinh chinh tren xe that
+#define PID_KP            80.0f
+#define PID_KI            150.0f
+#define PID_KD            0.0f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -56,6 +65,7 @@ I2C_HandleTypeDef hi2c1;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 
 UART_HandleTypeDef huart2;
@@ -68,8 +78,19 @@ Odometry_HandleTypeDef odom;
 volatile MPU6050_Data mpu_data;
 
 volatile bool cmd_received = false;
-float cmd_vel_right = 0.0f;
-float cmd_vel_left = 0.0f;
+volatile float cmd_vel_right = 0.0f; // Ghi trong ngat USB (usbd_cdc_if.c), don vi rad/s
+volatile float cmd_vel_left = 0.0f;
+
+// === Dieu khien van toc banh ===
+PID_HandleTypeDef pidL;
+PID_HandleTypeDef pidR;
+volatile float target_left_speed = 0.0f;  // rad/s
+volatile float target_right_speed = 0.0f; // rad/s
+volatile float speed_left = 0.0f;         // rad/s do tu encoder (de debug)
+volatile float speed_right = 0.0f;
+volatile int16_t duty_left = 0;           // -1000..1000 (de debug)
+volatile int16_t duty_right = 0;
+uint32_t last_cmd_tick = 0;
 
 //===bien giao tiep voi pi
 uint8_t rx_cmd_buffer[CDC_RX_BUF_SIZE];
@@ -98,13 +119,16 @@ static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void Motor_SetLeft(int16_t duty);
+static void Motor_SetRight(int16_t duty);
+static int16_t Speed_Control(PID_HandleTypeDef *pid, float target, float measured);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-bool flag_10ms = false;
+volatile bool flag_10ms = false;
 /* USER CODE END 0 */
 
 /**
@@ -142,13 +166,19 @@ int main(void)
   MX_TIM4_Init();
   MX_USART2_UART_Init();
   MX_USB_DEVICE_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   Encoder_Init(&encoderL, &htim1);
   Encoder_Init(&encoderR, &htim2);
   // //HAL_UART_Receive_DMA(&huart2, dma_rx_buffer, DMA_RX_BUF_SIZE);
-  // HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1); // PWM động cơ trái
-  // HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2); // PWM động cơ phải
-  // HAL_TIM_Base_Start_IT(&htim4);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1); // PWM động cơ trái
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2); // PWM động cơ phải
+  Motor_SetLeft(0);
+  Motor_SetRight(0);
+  PID_Init(&pidL, PID_KP, PID_KI, PID_KD);
+  PID_Init(&pidR, PID_KP, PID_KI, PID_KD);
+  HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_SET); // Bat TB6612
+  HAL_TIM_Base_Start_IT(&htim4); // Ngat 10ms cho vong dieu khien
   // MPU6050_Init(&hi2c1);
   //Odometry_Init(&odom);
   // SerialProtocol_Init(&huart2);
@@ -159,48 +189,48 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    if(new_cmd_flag==1){
+    // 1. Nhan lenh moi tu ROS2 (frame "rp01.50,lp02.30," parse trong usbd_cdc_if.c)
+    if (new_cmd_flag)
+    {
+      __disable_irq();               // Lay ca cap van toc cung luc, tranh bi ngat USB chen giua
+      float r = cmd_vel_right;
+      float l = cmd_vel_left;
       new_cmd_flag = 0;
-      HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+      __enable_irq();
+
+      if (r >  MAX_WHEEL_SPEED) r =  MAX_WHEEL_SPEED;
+      if (r < -MAX_WHEEL_SPEED) r = -MAX_WHEEL_SPEED;
+      if (l >  MAX_WHEEL_SPEED) l =  MAX_WHEEL_SPEED;
+      if (l < -MAX_WHEEL_SPEED) l = -MAX_WHEEL_SPEED;
+      target_right_speed = r;
+      target_left_speed  = l;
+      last_cmd_tick = HAL_GetTick();
+      HAL_GPIO_TogglePin(Led_GPIO_Port, Led_Pin);
     }
-    // set_duty_cycle(1000, &htim3, TIM_CHANNEL_1);
-    // set_duty_cycle(1000, &htim3, TIM_CHANNEL_2);
-    // CDC_Transmit_FS((uint8_t*)msg, strlen(msg));
-    // HAL_GPIO_TogglePin(GPIOC,Led_Pin);
-    // HAL_Delay(1000);
-    //target_left_speed = 3.0f;//TEST MACH 
-    //target_right_speed = 3.0f;//TEST MACH 
-    // ==========================================
-    //set_duty_cycle(target_left_speed,&htim3,TIM_CHANNEL_1);
 
-    HAL_GPIO_WritePin(GPIOC,STBY_Pin,SET);
-    HAL_GPIO_WritePin(GPIOA,GPIO_PIN_6, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOA,GPIO_PIN_7, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOB,L_in1_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOB,L_in2_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOB,R_in1_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOB,R_in2_Pin, GPIO_PIN_SET);
+    // 2. Vong dieu khien PID moi 10ms (ngat TIM4)
+    if (flag_10ms)
+    {
+      flag_10ms = false;
 
-    pwmA_state = HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_6);
-    pwmB_state = HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_7);
-    stby_state = HAL_GPIO_ReadPin(GPIOC,STBY_Pin);
+      // Mat lenh qua lau -> dung xe
+      if (HAL_GetTick() - last_cmd_tick > CMD_TIMEOUT_MS)
+      {
+        target_left_speed  = 0.0f;
+        target_right_speed = 0.0f;
+      }
 
-    L_in1_state = HAL_GPIO_ReadPin(GPIOB,L_in1_Pin);
-    L_in2_state = HAL_GPIO_ReadPin(GPIOB,L_in2_Pin);
-    R_in1_state = HAL_GPIO_ReadPin(GPIOB,R_in1_Pin);
-    R_in2_state = HAL_GPIO_ReadPin(GPIOB,R_in2_Pin);
-    
-    Encoder_Read_Raw(&encoderL);
-    Encoder_Nguoc_Read_Raw(&encoderR);
-    // if (flag_10ms)
-    // {
-    //     flag_10ms = false;
-        
-    //     Encoder_Update(&encoderL);
-    //     Encoder_Update(&encoderR);
+      // Doc encoder, doi rpm -> rad/s
+      Encoder_Update(&encoderL);
+      Encoder_Update(&encoderR);
+      speed_left  = encoderL.speed_rpm * (2.0f * PI / 60.0f);
+      speed_right = ENC_R_SIGN * encoderR.speed_rpm * (2.0f * PI / 60.0f);
 
-    //     char tx_buffer[64];
-    // }
+      duty_left  = Speed_Control(&pidL, target_left_speed,  speed_left);
+      duty_right = Speed_Control(&pidR, target_right_speed, speed_right);
+      Motor_SetLeft(duty_left);
+      Motor_SetRight(duty_right);
+    }
     
     /* USER CODE END WHILE */
 
@@ -396,6 +426,69 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 3;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
   * @brief TIM4 Initialization Function
   * @param None
   * @retval None
@@ -414,7 +507,7 @@ static void MX_TIM4_Init(void)
 
   /* USER CODE END TIM4_Init 1 */
   htim4.Instance = TIM4;
-  htim4.Init.Prescaler = 71;
+  htim4.Init.Prescaler = 47;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim4.Init.Period = 9999;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -510,24 +603,14 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, Led_Pin|STBY_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, L_in1_Pin|L_in2_Pin|R_in1_Pin|R_in2_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : Led_Pin STBY_Pin */
+  /*Configure GPIO pins : Led_Pin PC14 */
   GPIO_InitStruct.Pin = Led_Pin|STBY_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PA6 PA7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : L_in1_Pin L_in2_Pin R_in1_Pin R_in2_Pin */
   GPIO_InitStruct.Pin = L_in1_Pin|L_in2_Pin|R_in1_Pin|R_in2_Pin;
@@ -541,6 +624,54 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// Feedforward (ty le voi van toc dat) + PID bu sai so, ket qua la duty -1000..1000
+static int16_t Speed_Control(PID_HandleTypeDef *pid, float target, float measured)
+{
+  if (target > -SPEED_DEADBAND && target < SPEED_DEADBAND)
+  {
+    pid->integral = 0.0f;       // Lenh dung -> xoa tich phan de khong bi troi
+    pid->previous_error = 0.0f;
+    return 0;
+  }
+  float u = (target / MAX_WHEEL_SPEED) * PWM_MAX + PID_Compute(pid, target, measured);
+  if (u >  PWM_MAX) u =  PWM_MAX;
+  if (u < -PWM_MAX) u = -PWM_MAX;
+  return (int16_t)u;
+}
+
+// duty > 0: tien, duty < 0: lui (chieu lay theo code test: trai in1=1/in2=0, phai in1=0/in2=1)
+static void Motor_SetLeft(int16_t duty)
+{
+  if (duty >= 0)
+  {
+    HAL_GPIO_WritePin(L_in1_GPIO_Port, L_in1_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(L_in2_GPIO_Port, L_in2_Pin, GPIO_PIN_RESET);
+  }
+  else
+  {
+    HAL_GPIO_WritePin(L_in1_GPIO_Port, L_in1_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(L_in2_GPIO_Port, L_in2_Pin, GPIO_PIN_SET);
+    duty = -duty;
+  }
+  set_duty_cycle((uint16_t)duty, &htim3, TIM_CHANNEL_1); // PA6
+}
+
+static void Motor_SetRight(int16_t duty)
+{
+  if (duty >= 0)
+  {
+    HAL_GPIO_WritePin(R_in1_GPIO_Port, R_in1_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(R_in2_GPIO_Port, R_in2_Pin, GPIO_PIN_SET);
+  }
+  else
+  {
+    HAL_GPIO_WritePin(R_in1_GPIO_Port, R_in1_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(R_in2_GPIO_Port, R_in2_Pin, GPIO_PIN_RESET);
+    duty = -duty;
+  }
+  set_duty_cycle((uint16_t)duty, &htim3, TIM_CHANNEL_2); // PA7
+}
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM4) 
