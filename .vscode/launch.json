@@ -11,7 +11,7 @@
             "serverpath": "/usr/bin/openocd",
 
             "device": "STM32F103C8",
-            "gdbPath": "/usr/bin/gdb-multiarch",
+            "gdbPath": "gdb-multiarch",
 
             "configFiles": [
                 "interface/stlink.cfg",
@@ -29,7 +29,7 @@
 
             "executable": "${workspaceFolder}/build/AMR_stm32.elf",
 
-            "runToEntryPoint": "main"
+            //"runToEntryPoint": "main"
         }
     ]
 }

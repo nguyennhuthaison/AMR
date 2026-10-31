@@ -1,6 +1,6 @@
 #include "stdint.h"
 #include "pwm.h"
-void set_duty_cycle(uint16_t duty_cycle, TIM_HandleTypeDef *htim,int channel) {
+void set_duty_cycle(uint16_t duty_cycle, TIM_HandleTypeDef *htim,uint32_t channel) {
     if (duty_cycle > 1000) {
         duty_cycle = 1000;
     }

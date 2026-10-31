@@ -7,6 +7,8 @@ typedef struct {
     float y;//toa do y
     float theta;//goc xoay(radian)
     float yaw_imu;//goc xoay tu mpu6050
+    float v;//van toc tuyen tinh(m/s)
+    float w;//van toc goc(rad/s)
 } Odometry_HandleTypeDef;
 void Odometry_Init(Odometry_HandleTypeDef *odom);
 void Odometry_Update(Odometry_HandleTypeDef *odom, Encoder_HandleTypeDef *encL, Encoder_HandleTypeDef *encR);
