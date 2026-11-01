@@ -41,8 +41,8 @@ Core/Src/encoder.c \
 Core/Src/mpu6050.c \
 Core/Src/odometry.c \
 Core/Src/pid.c \
-Core/Src/pwm.c \
 Core/Src/fusion.c \
+Core/Src/motor_control.c \
 Core/Src/serial_protocol.c \
 Core/Src/stm32f1xx_it.c \
 Core/Src/stm32f1xx_hal_msp.c \

@@ -25,7 +25,7 @@
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
-
+#include <math.h>
 
 /* USER CODE END INCLUDE */
 
@@ -163,6 +163,28 @@ static void parse_ros2_command(char *cmd_str)
         new_cmd_flag = 1;
     }
 }
+
+// Hàm gửi vận tốc thực tế của 2 bánh lên ROS 2 qua USB CDC
+void CDC_Send_Wheel_Vel(float right_vel, float left_vel)
+{
+    static char tx_buf[32];
+    
+    // Xác định dấu chiều quay: 'p' (dương/tiến), 'n' (âm/lùi)
+    char r_sign = (right_vel >= 0.0f) ? 'p' : 'n';
+    char l_sign = (left_vel >= 0.0f) ? 'p' : 'n';
+
+    // Định dạng chuỗi theo đúng chuẩn gói tin: rp00.00,lp00.00,\r\n
+    int len = snprintf(tx_buf, sizeof(tx_buf), "r%c%05.2f,l%c%05.2f,\r\n",
+                       r_sign, fabsf(right_vel),
+                       l_sign, fabsf(left_vel));
+
+    if (len > 0)
+    {
+        // Đẩy dữ liệu ra cổng USB CDC
+        CDC_Transmit_FS((uint8_t*)tx_buf, (uint16_t)len);
+    }
+}
+
 /* USER CODE END PRIVATE_FUNCTIONS_DECLARATION */
 
 /**

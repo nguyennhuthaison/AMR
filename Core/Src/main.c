@@ -30,7 +30,7 @@
 #include "mpu6050.h"
 #include "odometry.h"
 #include "pid.h"
-#include "pwm.h"
+#include "motor_control.h"
 #include "fusion.h"
 #include "serial_protocol.h"
 #include "usbd_cdc_if.h"
@@ -108,6 +108,7 @@ volatile uint8_t L_in1_state = 0;
 volatile uint8_t L_in2_state = 0;
 volatile uint8_t R_in1_state = 0;
 volatile uint8_t R_in2_state = 0;
+uint32_t last_ros_send_tick =0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -121,8 +122,6 @@ static void MX_TIM4_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
-static void Motor_SetLeft(int16_t duty);
-static void Motor_SetRight(int16_t duty);
 static int16_t Speed_Control(PID_HandleTypeDef *pid, float target, float measured);
 /* USER CODE END PFP */
 
@@ -173,8 +172,8 @@ int main(void)
   // //HAL_UART_Receive_DMA(&huart2, dma_rx_buffer, DMA_RX_BUF_SIZE);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1); // PWM động cơ trái
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2); // PWM động cơ phải
-  Motor_SetLeft(0);
-  Motor_SetRight(0);
+  Motor_SetLeft(0,&htim3, TIM_CHANNEL_1);
+  Motor_SetRight(0,&htim3, TIM_CHANNEL_2);
   PID_Init(&pidL, PID_KP, PID_KI, PID_KD);
   PID_Init(&pidR, PID_KP, PID_KI, PID_KD);
   HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_SET); // Bat TB6612
@@ -228,20 +227,22 @@ int main(void)
 
       duty_left  = Speed_Control(&pidL, target_left_speed,  speed_left);
       duty_right = Speed_Control(&pidR, target_right_speed, speed_right);
-      Motor_SetLeft(duty_left);
-      Motor_SetRight(duty_right);
+      Motor_SetLeft(duty_left,&htim3,TIM_CHANNEL_1);
+      Motor_SetRight(duty_right,&htim3, TIM_CHANNEL_2);
     }
+    //3. Chu ky gui du lieu len ros2 dinh ky 50ms
+    // 2. Khối gửi dữ liệu lên ROS 2 tách biệt với chu kỳ 50ms (20Hz)
+    if (HAL_GetTick() - last_ros_send_tick >= 50)
+    {
+        last_ros_send_tick = HAL_GetTick();
+        
+        // Gửi vận tốc thực tế đo được lên ROS 2 qua USB CDC
+        CDC_Send_Wheel_Vel(speed_right, speed_left);
+    } 
     
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-  //   if (SerialProtocol_GetLatestCommand(&target_right_speed, &target_left_speed))
-  //   {
-  //       // Có lệnh mới -> Cập nhật trực tiếp cho động cơ hoặc bộ PID
-  //       // Ví dụ:
-  //       //Motor_SetSpeed(MOTOR_RIGHT, target_right_vel);
-  //       // Motor_SetSpeed(MOTOR_LEFT,  target_left_vel);
-  //   }
    }
   /* USER CODE END 3 */
 }
@@ -639,38 +640,6 @@ static int16_t Speed_Control(PID_HandleTypeDef *pid, float target, float measure
   return (int16_t)u;
 }
 
-// duty > 0: tien, duty < 0: lui (chieu lay theo code test: trai in1=1/in2=0, phai in1=0/in2=1)
-static void Motor_SetLeft(int16_t duty)
-{
-  if (duty >= 0)
-  {
-    HAL_GPIO_WritePin(L_in1_GPIO_Port, L_in1_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(L_in2_GPIO_Port, L_in2_Pin, GPIO_PIN_RESET);
-  }
-  else
-  {
-    HAL_GPIO_WritePin(L_in1_GPIO_Port, L_in1_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(L_in2_GPIO_Port, L_in2_Pin, GPIO_PIN_SET);
-    duty = -duty;
-  }
-  set_duty_cycle((uint16_t)duty, &htim3, TIM_CHANNEL_1); // PA6
-}
-
-static void Motor_SetRight(int16_t duty)
-{
-  if (duty >= 0)
-  {
-    HAL_GPIO_WritePin(R_in1_GPIO_Port, R_in1_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(R_in2_GPIO_Port, R_in2_Pin, GPIO_PIN_SET);
-  }
-  else
-  {
-    HAL_GPIO_WritePin(R_in1_GPIO_Port, R_in1_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(R_in2_GPIO_Port, R_in2_Pin, GPIO_PIN_RESET);
-    duty = -duty;
-  }
-  set_duty_cycle((uint16_t)duty, &htim3, TIM_CHANNEL_2); // PA7
-}
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
